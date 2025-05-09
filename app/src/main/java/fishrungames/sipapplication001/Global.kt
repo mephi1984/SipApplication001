@@ -34,7 +34,8 @@ object SipConfig {
     // Peer to call
     //const val CALL_DST_URI = "sip:77716924641@localphone.com;user=phone"
     //const val CALL_DST_URI = "sip:996773610568@localphone.com;user=phone"
-    const val CALL_DST_URI = "sip:447537174394@localphone.com;user=phone"
+    //const val CALL_DST_URI = "sip:+447537174394@localphone.com;user=phone"
+    //const val CALL_DST_URI = "sip:+79250148281@localphone.com;user=phone"
 
     // Camera ID
     const val VIDEO_CAPTURE_DEVICE_ID = -1

@@ -2,7 +2,10 @@ package fishrungames.sipapplication001
 
 import android.os.Bundle
 import android.os.Handler
+import android.os.Looper
 import android.os.Message
+import android.widget.TextView
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.navigation.findNavController
 import androidx.navigation.fragment.NavHostFragment
@@ -12,14 +15,33 @@ import androidx.navigation.ui.setupWithNavController
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import fishrungames.sipapplication001.databinding.ActivityMainBinding
 import fishrungames.sipapplication001.ui.home.HomeFragment
+import org.pjsip.pjsua2.AccountConfig
+import org.pjsip.pjsua2.AuthCredInfo
 import org.pjsip.pjsua2.CallInfo
+import org.pjsip.pjsua2.EpConfig
+import org.pjsip.pjsua2.TransportConfig
+import org.pjsip.pjsua2.pj_log_decoration
 import org.pjsip.pjsua2.pjsip_inv_state
+import org.pjsip.pjsua2.pjsip_transport_type_e
+import org.pjsip.pjsua2.pjsua_state
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
 
-    //private val TAG = "SipApplication001"
+    private lateinit var dialog: AlertDialog
+    private lateinit var dialogTextView: TextView
+    private lateinit var dialogTextView2: TextView
+    private var seconds = 0
+    private val handler = Handler(Looper.getMainLooper())
+
+    private val timerRunnable = object : Runnable {
+        override fun run() {
+            seconds++
+            dialogTextView2.text = "Seconds passed: $seconds"
+            handler.postDelayed(this, 1000)
+        }
+    }
 
     inner class SipHandler : Handler.Callback {
         override fun handleMessage(m: Message): Boolean {
@@ -27,25 +49,16 @@ class MainActivity : AppCompatActivity() {
                 if (m.what == SipConfig.MSG_UPDATE_CALL_INFO) {
                     val ci = m.obj as CallInfo
 
-                    /* Update button text */
-                    val buttonCall = getHomeFragment()?.btnCall
+                    //val buttonCall = getHomeFragment()?.btnCall
                     if (ci.state == pjsip_inv_state.PJSIP_INV_STATE_DISCONNECTED)
-                        buttonCall?.text = "Call"
-                    else if (ci.state > pjsip_inv_state.PJSIP_INV_STATE_NULL)
-                        buttonCall?.text = "Hangup"
-
-                    /* Update call state text */
-                    val textInfo = getHomeFragment()?.textView
-                    textInfo?.text = ci.stateText
-
-                    /* Hide video windows upon disconnection */
-                    if (ci.state == pjsip_inv_state.PJSIP_INV_STATE_DISCONNECTED) {
-                        /*val svLocalVideo = findViewById<View>(R.id.svLocalVideo) as SurfaceView
-                        val svRemoteVideo = findViewById<View>(R.id.svRemoteVideo) as SurfaceView
-                        svLocalVideo.visibility = View.INVISIBLE
-                        svRemoteVideo.visibility = View.INVISIBLE*/
+                    {
+                        dialog.setMessage("Calling...")
                     }
-                    //getHomeFragment()?.textView?.text += ci.
+                    else if (ci.state > pjsip_inv_state.PJSIP_INV_STATE_NULL) {
+                        dialog.setMessage("Hangup")
+                    }
+
+                    dialogTextView.text = ci.stateText
                 }
             }
             return true
@@ -60,8 +73,6 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        //loadNativeLibraries()
-        //checkPermissions()
 
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
@@ -69,41 +80,147 @@ class MainActivity : AppCompatActivity() {
         val navView: BottomNavigationView = binding.navView
 
         val navController = findNavController(R.id.nav_host_fragment_activity_main)
-        // Passing each menu ID as a set of Ids because each
-        // menu should be considered as top level destinations.
+
         val appBarConfiguration = AppBarConfiguration(
             setOf(
-                R.id.navigation_home, R.id.navigation_dashboard, R.id.navigation_notifications
+                R.id.navigation_home, R.id.navigation_notifications
             )
         )
         setupActionBarWithNavController(navController, appBarConfiguration)
         navView.setupWithNavController(navController)
 
+
         SipGlobal.uiHandler = Handler(this.mainLooper, SipHandler())
 
+        startSip()
+        //showCallDialog()
+
     }
-/*
-    private fun loadNativeLibraries() {
-        try {
-            System.loadLibrary("c++_shared")
-            //Logger.debug(TAG, "libc++_shared loaded")
-        } catch (error: UnsatisfiedLinkError) {
-            //Logger.error(TAG, "Error while loading libc++_shared native library", error)
-            throw RuntimeException(error)
+
+    fun showCallDialog() {
+        seconds = 0
+        val builder = AlertDialog.Builder(this)
+        val dialogView = layoutInflater.inflate(R.layout.call_dialog_layout, null)
+
+        dialogTextView = dialogView.findViewById(R.id.dialog_text)
+        dialogTextView2 = dialogView.findViewById(R.id.dialog_text2)
+        val closeButton = dialogView.findViewById<TextView>(R.id.close_button)
+
+        builder.setView(dialogView)
+        dialog = builder.create()
+        dialog.setCanceledOnTouchOutside(false)
+        dialog.setCancelable(false)
+        dialog.show()
+
+        handler.post(timerRunnable)
+
+        closeButton.setOnClickListener {
+            try {
+                hideCallDialog()
+                getHomeFragment()?.btnCall?.isEnabled = true
+                if (SipGlobal.call != null) {
+                    SipGlobal.ep.hangupAllCalls()
+                }
+            } catch (e: Exception) {
+                println(e)
+            }
+            SipGlobal.call = null
         }
+    }
+
+    fun hideCallDialog()
+    {
+        handler.removeCallbacks(timerRunnable)
+        dialog.dismiss()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        stopSip()
+        handler.removeCallbacks(timerRunnable)
+    }
+
+    fun startSip()
+    {
+        if (SipGlobal.ep.libGetState() > pjsua_state.PJSUA_STATE_NULL)
+            return
+
+        val epConfig = EpConfig()
+
+        val logCfg = epConfig.logConfig
+        SipGlobal.logWriter = MyLogWriter()
+        logCfg.writer = SipGlobal.logWriter
+        logCfg.decor = logCfg.decor and
+                (pj_log_decoration.PJ_LOG_HAS_CR or
+                        pj_log_decoration.PJ_LOG_HAS_NEWLINE).inv().toLong()
+
         try {
-            System.loadLibrary("openh264")
-            //Logger.debug(TAG, "OpenH264 loaded")
-        } catch (error: UnsatisfiedLinkError) {
-            //Logger.error(TAG, "Error while loading OpenH264 native library", error)
-            throw RuntimeException(error)
+            SipGlobal.ep.libCreate()
+            SipGlobal.ep.libInit(epConfig)
+        } catch (e: Exception) {
+            println(e)
         }
+
         try {
-            System.loadLibrary("pjsua2")
-            //Logger.debug(TAG, "PJSIP pjsua2 loaded")
-        } catch (error: UnsatisfiedLinkError) {
-            //Logger.error(TAG, "Error while loading PJSIP pjsua2 native library", error)
-            throw RuntimeException(error)
+            val sipTpConfig = TransportConfig()
+            sipTpConfig.port = SipConfig.SIP_LISTENING_PORT.toLong()
+            SipGlobal.ep.transportCreate(
+                pjsip_transport_type_e.PJSIP_TRANSPORT_UDP,
+                sipTpConfig)
+
+            SipGlobal.ep.transportCreate(
+                pjsip_transport_type_e.PJSIP_TRANSPORT_TLS,
+                TransportConfig()
+            )
+
+            val accCfg = AccountConfig()
+            accCfg.idUri = SipConfig.ACC_ID_URI
+            accCfg.regConfig.registrarUri = SipConfig.ACC_REGISTRAR
+            accCfg.sipConfig.authCreds.add(
+                AuthCredInfo("Digest", "*", SipConfig.ACC_USER, 0,
+                    SipConfig.ACC_PASSWD)
+            )
+            accCfg.sipConfig.proxies.add( SipConfig.ACC_PROXY )
+
+            accCfg.videoConfig.autoShowIncoming = false
+            accCfg.videoConfig.autoTransmitOutgoing = false
+            accCfg.videoConfig.defaultCaptureDevice = SipConfig.VIDEO_CAPTURE_DEVICE_ID
+            SipGlobal.acc.create(accCfg, true)
+        } catch (e: Exception) {
+            println(e)
         }
-    }*/
+
+        /* Start PJSUA2 */
+        try {
+            SipGlobal.ep.libStart()
+        } catch (e: Exception) {
+            println(e)
+        }
+
+        getHomeFragment()?.textView?.text = "PJSUA2 started successfully. Enter number to call:"
+
+        try {
+            SipGlobal.ep.codecSetPriority("AMR-WB", 255)
+            SipGlobal.ep.codecSetPriority("AMR/8000", 254)
+        } catch (e: Exception) {
+            println(e)
+        }
+
+    }
+
+    fun stopSip()
+    {
+        if (SipGlobal.ep.libGetState() == pjsua_state.PJSUA_STATE_NULL)
+            return
+        try {
+            SipGlobal.ep.hangupAllCalls()
+            SipGlobal.ep.libDestroy()
+        } catch (e: Exception) {
+            println(e)
+        }
+
+        getHomeFragment()?.textView?.text = "PJSUA2 stopped. Calls are not available"
+    }
+
+
 }
